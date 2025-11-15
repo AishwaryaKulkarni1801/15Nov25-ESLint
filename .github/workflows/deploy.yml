@@ -1,0 +1,195 @@
+name: Angular CI/CD - Jest Coverage + ESLint + GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    
+    steps:
+      # Step 1: Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Setup Node.js (Latest LTS)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      # Step 3: Cache node_modules
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      # Step 4: Install dependencies
+      - name: Install dependencies
+        run: npm ci
+
+      # Step 5: Run Jest tests with coverage
+      - name: Run Jest tests with coverage
+        id: test
+        run: |
+          echo "Running Jest tests with coverage..."
+          npm run test -- --coverage --watchAll=false
+        continue-on-error: true
+
+      # Step 6: Validate test coverage
+      - name: Validate test coverage
+        id: coverage-check
+        run: |
+          if [ ! -f "coverage/coverage-summary.json" ]; then
+            echo "❌ Coverage summary file not found!"
+            echo "COVERAGE_STATUS=missing" >> $GITHUB_ENV
+            echo "COVERAGE_PERCENT=0" >> $GITHUB_ENV
+            exit 1
+          fi
+
+          # Extract total coverage percentage
+          COVERAGE=$(cat coverage/coverage-summary.json | grep -oP '"total":\s*{[^}]*"lines":\s*{\s*"pct":\s*\K[0-9.]+' | head -1)
+          
+          echo "Total Coverage: ${COVERAGE}%"
+          echo "COVERAGE_PERCENT=${COVERAGE}" >> $GITHUB_ENV
+          
+          # Check if coverage is at least 80%
+          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
+            echo "❌ Deployment stopped: Code coverage below 80% (Actual: ${COVERAGE}%)"
+            echo "COVERAGE_STATUS=failed" >> $GITHUB_ENV
+            exit 1
+          fi
+          
+          echo "✅ Coverage validation passed: ${COVERAGE}%"
+          echo "COVERAGE_STATUS=passed" >> $GITHUB_ENV
+
+      # Step 7: Check test results
+      - name: Check test results
+        if: steps.test.outcome == 'failure'
+        run: |
+          echo "❌ Deployment stopped: Test suite failed"
+          echo "TEST_STATUS=failed" >> $GITHUB_ENV
+          exit 1
+
+      - name: Mark tests as passed
+        if: steps.test.outcome == 'success'
+        run: |
+          echo "✅ All tests passed"
+          echo "TEST_STATUS=passed" >> $GITHUB_ENV
+
+      # Step 8: Run ESLint validation
+      - name: Run ESLint validation
+        id: lint
+        run: |
+          echo "Running ESLint validation..."
+          npm run lint
+        continue-on-error: true
+
+      # Step 9: Check ESLint results
+      - name: Check ESLint results
+        if: steps.lint.outcome == 'failure'
+        run: |
+          echo "❌ Deployment stopped: ESLint validation failed"
+          echo "LINT_STATUS=failed" >> $GITHUB_ENV
+          exit 1
+
+      - name: Mark lint as passed
+        if: steps.lint.outcome == 'success'
+        run: |
+          echo "✅ ESLint validation passed"
+          echo "LINT_STATUS=passed" >> $GITHUB_ENV
+
+      # Step 10: Extract project name from angular.json
+      - name: Extract Angular project name
+        id: project-info
+        run: |
+          PROJECT_NAME=$(node -p "Object.keys(require('./angular.json').projects)[0]")
+          OUTPUT_PATH=$(node -p "require('./angular.json').projects['${PROJECT_NAME}'].architect.build.options.outputPath")
+          echo "PROJECT_NAME=${PROJECT_NAME}" >> $GITHUB_ENV
+          echo "OUTPUT_PATH=${OUTPUT_PATH}" >> $GITHUB_ENV
+          echo "Detected project: ${PROJECT_NAME}"
+          echo "Output path: ${OUTPUT_PATH}"
+
+      # Step 11: Build Angular project
+      - name: Build Angular project
+        run: |
+          echo "Building Angular project with base-href..."
+          npm run build -- --base-href '/EsLint4/'
+
+      # Step 12: Copy index.html to 404.html (SPA routing fix)
+      - name: Fix SPA routing for GitHub Pages
+        run: |
+          cp ${{ env.OUTPUT_PATH }}/index.html ${{ env.OUTPUT_PATH }}/404.html
+          echo "✅ Copied index.html to 404.html for SPA routing"
+
+      # Step 13: Configure GitHub Pages
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v4
+
+      # Step 14: Upload artifact
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ env.OUTPUT_PATH }}
+
+      # Step 15: Deploy to GitHub Pages
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      # Step 16: Print deployment URL
+      - name: Print deployment URL
+        run: |
+          echo "🚀 Deployment successful!"
+          echo "📍 Your site is live at: ${{ steps.deployment.outputs.page_url }}"
+
+  # Notification job - always runs
+  notify:
+    runs-on: ubuntu-latest
+    needs: build-test-deploy
+    if: always()
+    
+    steps:
+      - name: Check deployment status
+        run: |
+          if [ "${{ needs.build-test-deploy.result }}" == "success" ]; then
+            echo "✅ Deployment succeeded! 🎉"
+            echo "📍 Check your site at: https://AishwaryaKulkarni1801.github.io/15Nov25-ESLint/"
+            echo "🌐 Full URL: https://aishwaryakulkarni1801.github.io/EsLint4/"
+          else
+            echo "❌ Deployment failed"
+            echo "📋 Failure reason:"
+            
+            # Determine the specific failure reason
+            if [ "${{ needs.build-test-deploy.result }}" == "failure" ]; then
+              echo "   - One or more steps failed during the build/test/deploy process"
+              echo "   - Check the logs above for specific error details:"
+              echo "     • Test suite failures"
+              echo "     • Coverage below 80%"
+              echo "     • ESLint validation errors"
+              echo "     • Build failures"
+            elif [ "${{ needs.build-test-deploy.result }}" == "cancelled" ]; then
+              echo "   - Workflow was cancelled"
+            else
+              echo "   - Unknown failure reason"
+            fi
+            
+            exit 1
+          fi
