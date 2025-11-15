@@ -1,4 +1,4 @@
-name: Angular CI/CD - Jest Coverage + ESLint + GitHub Pages
+name: CI/CD - ESLint + Coverage + GitHub Pages
 
 on:
   push:
@@ -45,41 +45,61 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Step 5: Run Jest tests with coverage
+      # Step 5: Run ESLint validation (BEFORE tests)
+      - name: Run ESLint validation
+        id: lint
+        run: |
+          echo "Running ESLint validation..."
+          npm run lint
+
+      # Step 6: Run Jest tests with coverage
       - name: Run Jest tests with coverage
         id: test
         run: |
           echo "Running Jest tests with coverage..."
           npm run test -- --coverage --watchAll=false
-        continue-on-error: true
 
-      # Step 6: Validate test coverage
+      # Step 7: Validate test coverage
       - name: Validate test coverage
         id: coverage-check
         run: |
+          # Check if coverage summary file exists
           if [ ! -f "coverage/coverage-summary.json" ]; then
             echo "❌ Coverage summary file not found!"
+            echo "💡 Make sure your Jest config includes 'json-summary' in coverageReporters"
             echo "COVERAGE_STATUS=missing" >> $GITHUB_ENV
             echo "COVERAGE_PERCENT=0" >> $GITHUB_ENV
             exit 1
           fi
 
-          # Extract total coverage percentage using Node.js
+          # Extract total coverage percentage using Node.js (robust parsing)
           COVERAGE=$(node -p "
-            const fs = require('fs');
-            const coverage = JSON.parse(fs.readFileSync('coverage/coverage-summary.json', 'utf8'));
-            coverage.total.lines.pct;
+            try {
+              const fs = require('fs');
+              const coverage = JSON.parse(fs.readFileSync('coverage/coverage-summary.json', 'utf8'));
+              const pct = coverage.total.lines.pct;
+              if (isNaN(pct)) throw new Error('Invalid coverage value');
+              pct;
+            } catch (error) {
+              console.error('Error parsing coverage:', error.message);
+              process.exit(1);
+            }
           ")
           
-          echo "Total Coverage: ${COVERAGE}%"
+          echo "📊 Total Coverage: ${COVERAGE}%"
           echo "COVERAGE_PERCENT=${COVERAGE}" >> $GITHUB_ENV
           
           # Check if coverage is at least 80%
           THRESHOLD=80
           COVERAGE_INT=${COVERAGE%.*}
           
+          if [ -z "$COVERAGE_INT" ]; then
+            echo "❌ Failed to parse coverage percentage"
+            exit 1
+          fi
+          
           if [ "$COVERAGE_INT" -lt "$THRESHOLD" ]; then
-            echo "❌ Deployment stopped: Code coverage below 80% (Actual: ${COVERAGE}%)"
+            echo "❌ Deployment stopped: Code coverage below ${THRESHOLD}% (Actual: ${COVERAGE}%)"
             echo "COVERAGE_STATUS=failed" >> $GITHUB_ENV
             exit 1
           fi
@@ -87,81 +107,80 @@ jobs:
           echo "✅ Coverage validation passed: ${COVERAGE}%"
           echo "COVERAGE_STATUS=passed" >> $GITHUB_ENV
 
-      # Step 7: Check test results
-      - name: Check test results
-        if: steps.test.outcome == 'failure'
-        run: |
-          echo "❌ Deployment stopped: Test suite failed"
-          echo "TEST_STATUS=failed" >> $GITHUB_ENV
-          exit 1
-
-      - name: Mark tests as passed
-        if: steps.test.outcome == 'success'
-        run: |
-          echo "✅ All tests passed"
-          echo "TEST_STATUS=passed" >> $GITHUB_ENV
-
-      # Step 8: Run ESLint validation
-      - name: Run ESLint validation
-        id: lint
-        run: |
-          echo "Running ESLint validation..."
-          npm run lint
-        continue-on-error: true
-
-      # Step 9: Check ESLint results
-      - name: Check ESLint results
-        if: steps.lint.outcome == 'failure'
-        run: |
-          echo "❌ Deployment stopped: ESLint validation failed"
-          echo "LINT_STATUS=failed" >> $GITHUB_ENV
-          exit 1
-
-      - name: Mark lint as passed
-        if: steps.lint.outcome == 'success'
-        run: |
-          echo "✅ ESLint validation passed"
-          echo "LINT_STATUS=passed" >> $GITHUB_ENV
-
-      # Step 10: Extract project name from angular.json
-      - name: Extract Angular project name
+      # Step 8: Detect framework and extract project info
+      - name: Detect framework and project info
         id: project-info
         run: |
-          PROJECT_NAME=$(node -p "Object.keys(require('./angular.json').projects)[0]")
-          OUTPUT_PATH=$(node -p "require('./angular.json').projects['${PROJECT_NAME}'].architect.build.options.outputPath")
-          echo "PROJECT_NAME=${PROJECT_NAME}" >> $GITHUB_ENV
-          echo "OUTPUT_PATH=${OUTPUT_PATH}" >> $GITHUB_ENV
-          echo "Detected project: ${PROJECT_NAME}"
-          echo "Output path: ${OUTPUT_PATH}"
+          # Detect framework type
+          if [ -f "angular.json" ]; then
+            echo "FRAMEWORK=angular" >> $GITHUB_ENV
+            PROJECT_NAME=$(node -p "Object.keys(require('./angular.json').projects)[0]")
+            OUTPUT_PATH=$(node -p "require('./angular.json').projects['${PROJECT_NAME}'].architect.build.options.outputPath")
+            echo "PROJECT_NAME=${PROJECT_NAME}" >> $GITHUB_ENV
+            echo "OUTPUT_PATH=${OUTPUT_PATH}" >> $GITHUB_ENV
+            echo "Detected: Angular project '${PROJECT_NAME}'"
+            echo "Output path: ${OUTPUT_PATH}"
+          elif [ -f "package.json" ] && grep -q "react" package.json; then
+            echo "FRAMEWORK=react" >> $GITHUB_ENV
+            if [ -d "build" ]; then
+              echo "OUTPUT_PATH=build" >> $GITHUB_ENV
+            else
+              echo "OUTPUT_PATH=dist" >> $GITHUB_ENV
+            fi
+            echo "Detected: React project"
+          elif [ -f "package.json" ] && grep -q "vue" package.json; then
+            echo "FRAMEWORK=vue" >> $GITHUB_ENV
+            echo "OUTPUT_PATH=dist" >> $GITHUB_ENV
+            echo "Detected: Vue project"
+          else
+            echo "OUTPUT_PATH=dist" >> $GITHUB_ENV
+            echo "Detected: Generic project (using dist/)"
+          fi
 
-      # Step 11: Build Angular project
-      - name: Build Angular project
+      # Step 9: Build project
+      - name: Build project
         run: |
-          echo "Building Angular project with base-href..."
-          npm run build -- --base-href '/EsLint4/'
+          if [ "${{ env.FRAMEWORK }}" == "angular" ]; then
+            echo "Building Angular project with base-href..."
+            npm run build -- --base-href '/15Nov25-ESLint/'
+          else
+            echo "Building project..."
+            npm run build
+          fi
 
-      # Step 12: Copy index.html to 404.html (SPA routing fix)
+      # Step 9: Build project
+      - name: Build project
+        run: |
+          if [ "${{ env.FRAMEWORK }}" == "angular" ]; then
+            echo "Building Angular project with base-href..."
+            npm run build -- --base-href '/15Nov25-ESLint/'
+          else
+            echo "Building project..."
+            npm run build
+          fi
+
+      # Step 10: Copy index.html to 404.html (SPA routing fix)
       - name: Fix SPA routing for GitHub Pages
         run: |
           cp ${{ env.OUTPUT_PATH }}/index.html ${{ env.OUTPUT_PATH }}/404.html
           echo "✅ Copied index.html to 404.html for SPA routing"
 
-      # Step 13: Configure GitHub Pages
+      # Step 11: Configure GitHub Pages
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v4
 
-      # Step 14: Upload artifact
+      # Step 12: Upload artifact
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ${{ env.OUTPUT_PATH }}
 
-      # Step 15: Deploy to GitHub Pages
+      # Step 13: Deploy to GitHub Pages
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
 
-      # Step 16: Print deployment URL
+      # Step 14: Print deployment URL
       - name: Print deployment URL
         run: |
           echo "🚀 Deployment successful!"
@@ -179,7 +198,6 @@ jobs:
           if [ "${{ needs.build-test-deploy.result }}" == "success" ]; then
             echo "✅ Deployment succeeded! 🎉"
             echo "📍 Check your site at: https://AishwaryaKulkarni1801.github.io/15Nov25-ESLint/"
-            echo "🌐 Full URL: https://aishwaryakulkarni1801.github.io/EsLint4/"
           else
             echo "❌ Deployment failed"
             echo "📋 Failure reason:"
@@ -188,9 +206,9 @@ jobs:
             if [ "${{ needs.build-test-deploy.result }}" == "failure" ]; then
               echo "   - One or more steps failed during the build/test/deploy process"
               echo "   - Check the logs above for specific error details:"
+              echo "     • ESLint validation errors (runs first)"
               echo "     • Test suite failures"
               echo "     • Coverage below 80%"
-              echo "     • ESLint validation errors"
               echo "     • Build failures"
             elif [ "${{ needs.build-test-deploy.result }}" == "cancelled" ]; then
               echo "   - Workflow was cancelled"
@@ -200,3 +218,4 @@ jobs:
             
             exit 1
           fi
+
