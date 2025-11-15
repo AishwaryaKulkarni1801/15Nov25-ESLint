@@ -64,14 +64,21 @@ jobs:
             exit 1
           fi
 
-          # Extract total coverage percentage
-          COVERAGE=$(cat coverage/coverage-summary.json | grep -oP '"total":\s*{[^}]*"lines":\s*{\s*"pct":\s*\K[0-9.]+' | head -1)
+          # Extract total coverage percentage using Node.js
+          COVERAGE=$(node -p "
+            const fs = require('fs');
+            const coverage = JSON.parse(fs.readFileSync('coverage/coverage-summary.json', 'utf8'));
+            coverage.total.lines.pct;
+          ")
           
           echo "Total Coverage: ${COVERAGE}%"
           echo "COVERAGE_PERCENT=${COVERAGE}" >> $GITHUB_ENV
           
           # Check if coverage is at least 80%
-          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
+          THRESHOLD=80
+          COVERAGE_INT=${COVERAGE%.*}
+          
+          if [ "$COVERAGE_INT" -lt "$THRESHOLD" ]; then
             echo "❌ Deployment stopped: Code coverage below 80% (Actual: ${COVERAGE}%)"
             echo "COVERAGE_STATUS=failed" >> $GITHUB_ENV
             exit 1
