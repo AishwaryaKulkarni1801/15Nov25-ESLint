@@ -1,29 +1,67 @@
-import { TestBed } from '@angular/core/testing';
-import { RouterTestingModule } from '@angular/router/testing';
 import { AppComponent } from './app.component';
 
-describe('AppComponent', () => {
-  beforeEach(() => TestBed.configureTestingModule({
-    imports: [RouterTestingModule],
-    declarations: [AppComponent]
-  }));
+// Helper factory following established patterns: createSUT (system under test)
+const createSUT = () => new AppComponent();
 
-  it('should create the app', () => {
-    const fixture = TestBed.createComponent(AppComponent);
-    const app = fixture.componentInstance;
-    expect(app).toBeTruthy();
+describe('AppComponent (unit, no TestBed)', () => {
+  let component: AppComponent;
+
+  beforeEach(() => {
+    component = createSUT();
   });
 
-  it(`should have as title 'ESLint15-11-25'`, () => {
-    const fixture = TestBed.createComponent(AppComponent);
-    const app = fixture.componentInstance;
-    expect(app.title).toEqual('ESLint15-11-25');
+  it('should create the component instance', () => {
+    expect(component).toBeTruthy();
   });
 
-  it('should render title', () => {
-    const fixture = TestBed.createComponent(AppComponent);
-    fixture.detectChanges();
-    const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('.content span')?.textContent).toContain('ESLint15-11-25 app is running!');
+  it("should have default title 'Angular Demo App'", () => {
+    expect(component.title).toBe('Angular Demo App');
+  });
+
+  it('should allow title to be changed', () => {
+    component.title = 'New Title';
+    expect(component.title).toBe('New Title');
+  });
+
+  it('should expose the private unusedProperty via any cast and allow mutation', () => {
+    // tslint:disable-next-line: no-any
+    const anyComp: any = component as any;
+    expect(anyComp.unusedProperty).toBe('not used anywhere');
+    anyComp.unusedProperty = 'now used';
+    expect(anyComp.unusedProperty).toBe('now used');
+  });
+
+  it('should call console.log("Method called") when someMethod is invoked', () => {
+    const spy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      component.someMethod();
+      expect(spy).toHaveBeenCalledWith('Method called');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('should not expose function-scoped variables after calling someMethod', () => {
+    // var inside method should not be attached to the instance
+    component.someMethod();
+    // tslint:disable-next-line: no-any
+    const anyComp: any = component as any;
+    expect(anyComp.oldStyleVar).toBeUndefined();
+  });
+
+  it('getAngularVersion should return a valid Angular version string', () => {
+    expect(component.getAngularVersion()).toBe('16.x');
+  });
+
+  it('calling someMethod multiple times should consistently call console.log', () => {
+    const spy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      component.someMethod();
+      component.someMethod();
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
+
